@@ -1,0 +1,38 @@
+apiVersion: score.dev/v1b1
+
+metadata:
+  name: hello-world
+
+containers:
+  hello:
+    image: postgres:16-alpine
+    command: ["/bin/sh"]
+    args:
+      - -c
+      - |
+        while true
+        do
+          echo "Message: $MESSAGE"
+          echo "REDIS_HOST:     $REDIS_HOST"
+          echo "REDIS_PORT:     $REDIS_PORT"
+          echo "REDIS_PASSWORD: $REDIS_PASSWORD"
+          echo "POSTGRES:       $PGCONNECTION"
+          echo
+          echo "Connecting to Redis"
+          printf "AUTH ${REDIS_PASSWORD}\r\n$4\r\nPING\r\n" | nc -v -w1 $REDIS_HOST $REDIS_PORT
+          echo "Connecting to Postgre DB"
+          echo "SELECT 'Hello world!';" | psql "$PGCONNECTION"
+          sleep 5
+        done
+    variables:
+      MESSAGE: "Hello World"
+      REDIS_HOST: ${resources.redis.host}
+      REDIS_PORT: ${resources.redis.port}
+      REDIS_PASSWORD: ${resources.redis.password}
+      PGCONNECTION: "postgresql://${resources.db.username}:${resources.db.password}@${resources.db.host}:${resources.db.port}/${resources.db.name}"
+
+resources:
+  redis:
+    type: redis
+  db:
+    type: postgres

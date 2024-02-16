@@ -1,0 +1,118 @@
+s3:
+  outputs: |
+    name: my-bucket
+redis:
+  init: |
+    host: redis-{{ .id }}
+    port: {{ .state | dig "port" 6379 }}
+    password: {{ .state | dig "password" (randAlphaNum 16) | quote}}
+  state: |
+    password: {{ .init.password | quote }}
+    port: {{ .init.port }}
+  outputs: |
+    host: {{ .init.host | quote }}
+    port: {{ .init.port }}
+    username: ""
+    password: {{ .init.password | quote }}
+  services: |
+    {{ .init.host }}:
+      image: redis:7.2
+      entrypoint:
+      - redis-server
+      command:
+      - /usr/local/etc/redis/redis.conf
+      volumes:
+      - type: bind
+        source: {{ .paths.files }}/{{ .init.host }}/redis.conf
+        target: /usr/local/etc/redis/redis.conf
+  files: |
+    {{ .init.host }}/redis.conf: |
+      requirepass {{ .init.password }}
+      port {{ .init.port }}
+postgres:
+  init: |
+    instance:
+      provisioned: {{ hasKey .shared "postgresInstance" | toRawJson }}
+    {{- if hasKey .state "instance" }}
+      host: {{ .state.instance.host | quote }}
+      port: {{ .state.instance.port }}
+      name: {{ .state.instance.name | quote }}
+      username: {{ .state.instance.username | quote }}
+      password: {{ .state.instance.password | quote }}
+    {{- else }}
+      host: {{     .shared | dig "postgresInstance" "host"     "postgres-instance" | quote }}
+      port: {{     .shared | dig "postgresInstance" "port"     5432 }}
+      name: {{     .shared | dig "postgresInstance" "name"     "postgres" | quote }}
+      username: {{ .shared | dig "postgresInstance" "username" "postgres" | quote }}
+      password: {{ .shared | dig "postgresInstance" "password" (randAlphaNum 16) | quote }}
+    {{- end}}
+    database:
+      username: {{ .state | dig "database" "username" (randAlpha 8) | lower | quote }}
+      password: {{ .state | dig "database" "password" (randAlphaNum 16) | quote }}
+      name: {{ .state | dig "database" "name" (randAlpha 8) | lower | quote }}
+  state: |
+    instance:
+      host: {{ .init.instance.host | quote }}
+      port: {{ .init.instance.port }}
+      username: {{ .init.instance.username | quote }}
+      password: {{ .init.instance.password | quote }}
+      name: {{ .init.instance.name | quote }}
+    database:
+      username: {{ .init.database.username | quote }}
+      password: {{ .init.database.password | quote }}
+      name: {{ .init.database.name | quote }}
+  shared: |
+    postgresInstance:
+      username: .init.instance.user
+      password: .init.instance.password
+      host: .init.instance.host
+      port: .init.instance.port
+  outputs: |
+    host: {{ .init.instance.host | quote }}
+    port: {{ .init.instance.port }}
+    username: {{ .init.database.username | quote }}
+    password: {{ .init.database.password | quote }}
+    name: {{ .init.database.name | quote }}
+  services: |
+    {{- if .init.instance.provisioned | not }}
+    postgres-instance:
+      image: postgres:16-alpine
+      restart: always
+      ports:
+      - 127.0.0.1:15432:5432/tcp
+      environment:
+        POSTGRES_PASSWORD: {{ .init.instance.password }}
+        POSTGRES_USER: {{ .init.instance.username }}
+      volumes:
+      - {{ .paths.volumes }}/postgres-instance:/var/lib/postgresql/data
+      healthcheck:
+        test: ["CMD", "pg_isready", "-U", "{{ .init.instance.username }}"]
+        interval: 2s
+        timeout: 2s
+        retries: 10
+    postgres-init:
+      image: postgres:16-alpine
+      command:
+      - "-c"
+      - |
+        cd /db-scripts
+        ls db-*.sql | xargs cat | psql "postgresql://{{ .init.instance.username }}:{{ .init.instance.password }}@{{ .init.instance.host }}:{{ .init.instance.port }}/{{ .init.instance.username }}"
+      depends_on:
+        postgres-instance:
+          condition: service_healthy
+          restart: true
+      entrypoint:
+      - /bin/sh
+      volumes:
+      - {{ .paths.files }}/postgres-databases:/db-scripts
+    {{- end }}
+  files: |
+    postgres-databases/db-{{ .init.database.name }}.sql: |
+      SELECT 'CREATE DATABASE {{ .init.database.name }}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ .init.database.name }}')\gexec
+      SELECT $$CREATE USER {{ .init.database.username }} WITH PASSWORD '{{ .init.database.password }}'$$ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ .init.database.username }}')\gexec
+      GRANT ALL PRIVILEGES ON DATABASE {{ .init.database.name }} TO {{ .init.database.username }};
+  volumeDirs: |
+    {{- if .init.instance.provisioned | not }}
+    postgres-instance/data: {}
+    {{- end }}
+      
